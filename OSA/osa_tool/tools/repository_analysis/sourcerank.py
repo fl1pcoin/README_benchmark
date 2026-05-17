@@ -1,0 +1,53 @@
+import os
+import re
+
+from OSA.osa_tool.config.settings import ConfigManager
+from OSA.osa_tool.utils.utils import get_repo_tree, parse_folder_name
+
+
+class SourceRank:
+    """
+    Lightweight analyzer for a local repository structure.
+
+    This class inspects the repository file tree and provides
+    boolean signals indicating the presence of commonly expected
+    project artifacts such as README, LICENSE, documentation,
+    examples, tests, and metadata files.
+    """
+
+    def __init__(self, config_manager: ConfigManager):
+        self.repo_url = config_manager.get_git_settings().repository
+        self.repo_path = os.path.join(os.getcwd(), parse_folder_name(self.repo_url))
+        self.tree = get_repo_tree(self.repo_path)
+
+    def readme_presence(self) -> bool:
+        pattern = re.compile(r"\bREADME(\.\w+)?\b", re.IGNORECASE)
+        return bool(pattern.search(self.tree))
+
+    def license_presence(self) -> bool:
+        pattern = re.compile(r"\bLICEN[SC]E(\.\w+)?\b", re.IGNORECASE)
+        return bool(pattern.search(self.tree))
+
+    def examples_presence(self) -> bool:
+        pattern = re.compile(r"\b(tutorials?|examples|notebooks?)\b", re.IGNORECASE)
+        return bool(pattern.search(self.tree))
+
+    def docs_presence(self) -> bool:
+        pattern = re.compile(r"\b(docs?|documentation|wiki|manuals?)\b", re.IGNORECASE)
+        return bool(pattern.search(self.tree))
+
+    def tests_presence(self) -> bool:
+        pattern = re.compile(r"\b(tests?|testcases?|unittest|test_suite)\b", re.IGNORECASE)
+        return bool(pattern.search(self.tree))
+
+    def citation_presence(self) -> bool:
+        pattern = re.compile(r"\bCITATION(\.\w+)?\b", re.IGNORECASE)
+        return bool(pattern.search(self.tree))
+
+    def contributing_presence(self) -> bool:
+        pattern = re.compile(r"\b\w*contribut\w*\.(md|rst|txt)$", re.IGNORECASE | re.MULTILINE)
+        return bool(pattern.search(self.tree))
+
+    def requirements_presence(self) -> bool:
+        pattern = re.compile(r"\brequirements(\.\w+)?\b", re.IGNORECASE)
+        return bool(pattern.search(self.tree))

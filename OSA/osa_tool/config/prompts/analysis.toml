@@ -1,0 +1,87 @@
+[prompts]
+main_prompt = """
+INPUT DATA:
+
+1. PROJECT NAME: {project_name}
+2. METADATA: {metadata}
+3. REPOSITORY FILE TREE: {repository_tree}
+4. PRESENCE OF IMPORTANT FILES AND DIRECTORIES: {presence_files}
+5. README CONTENT: {readme_content}
+
+TASK:
+
+Generate a JSON report following this exact structure:
+
+{{
+  "structure": {{
+    "compliance": "text",
+    "missing_files": ["list"],
+    "organization": "text"
+  }},
+  "readme": {{
+    "readme_quality": "text"
+    "project_description": "Yes/No/Partial",
+    "installation": "Yes/No/Partial",
+    "usage_examples": "Yes/No/Partial",
+    "contribution_guidelines": "Yes/No/Partial",
+    "license_specified": "Yes/No/Partial",
+    "badges_present": "Yes/No/Partial"
+  }},
+  "documentation": {{
+    "tests_present": "Yes/No/Partial",
+    "docs_quality": "text",
+    "outdated_content": boolean
+  }},
+  "assessment": {{
+    "key_shortcomings": ["list"],
+    "recommendations": ["list"]
+  }}
+}}
+
+RULES:
+
+- Use double quotes for JSON
+- No markdown formatting
+- Only use Yes/No/Partial for readme fields and tests_present
+- Be strictly factual about file presence
+- Check for the presence of the directory with tests
+- Prioritize 3 most critical recommendations
+
+"""
+
+after_report_summary_from_events_prompt = """
+INPUT DATA (operations list):
+
+{operations}
+
+TASK:
+Write a short factual summary of what was performed.
+
+REQUIREMENTS:
+- Use only operations with performed == Yes
+- Base the wording on the provided events and result fields
+- Keep it concise (about two short paragraphs)
+- Do not use markdown
+- Do not use bullet points or lists
+
+OUTPUT:
+Return ONLY JSON matching the system message schema.
+"""
+
+after_report_blocks_from_events_prompt = """
+INPUT DATA (operations list):
+
+{operations}
+
+TASK:
+Group performed operations into logical blocks.
+
+REQUIREMENTS:
+- Include ONLY operations with performed == Yes
+- Each performed operation must appear in exactly one block
+- "tasks" must list operation names exactly as provided (strings)
+- Do not invent operations
+
+OUTPUT:
+Return ONLY JSON matching the system message schema.
+"""

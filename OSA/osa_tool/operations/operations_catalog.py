@@ -1,0 +1,338 @@
+import inspect
+import os
+from typing import List, Literal
+
+from pydantic import BaseModel, Field
+
+from OSA.osa_tool.operations.analysis.repository_report.report_maker import ReportGenerator
+from OSA.osa_tool.operations.analysis.repository_validation.doc_validator import DocValidator
+from OSA.osa_tool.operations.analysis.repository_validation.paper_validator import PaperValidator
+from OSA.osa_tool.operations.codebase.directory_translation.dirs_and_files_translator import RepositoryStructureTranslator
+from OSA.osa_tool.operations.codebase.docstring_generation.docstring_generation import DocstringsGenerator
+from OSA.osa_tool.operations.codebase.notebook_conversion.notebook_converter import NotebookConverter
+from OSA.osa_tool.operations.codebase.organization.repo_organizer import RepoOrganizer
+from OSA.osa_tool.operations.codebase.requirements_generation.requirements_generation import RequirementsGenerator
+from OSA.osa_tool.operations.codebase.workflow_generation.workflow_executor import WorkflowsExecutor
+from OSA.osa_tool.operations.docs.about_generation.about_generator import AboutGenerator
+from OSA.osa_tool.operations.docs.community_docs_generation.docs_run import generate_documentation
+from OSA.osa_tool.operations.docs.community_docs_generation.license_generation import LicenseCompiler
+from OSA.osa_tool.operations.docs.readme_generation.readme_agent import ReadmeAgent
+from OSA.osa_tool.operations.docs.readme_translation.readme_translator import ReadmeTranslator
+from OSA.osa_tool.operations.registry import Operation, OperationRegistry
+from OSA.osa_tool.utils.utils import osa_project_root
+
+
+class GenerateReportOperation(Operation):
+    name = "generate_report"
+    description = "Generate repository quality report as PDF"
+
+    supported_intents = ["new_task"]
+    supported_scopes = ["full_repo", "analysis"]
+    priority = 5
+
+    executor = ReportGenerator
+    executor_method = "run"
+    executor_dependencies = ["config_manager", "git_agent", "create_fork"]
+
+
+class DocValidationOperation(Operation):
+    name = "validate_doc"
+    description = (
+        "Check if the procedures or workflows from the attached technical documentation "
+        "can be reproduced using the selected repository."
+    )
+
+    supported_intents = ["new_task"]
+    supported_scopes = ["full_repo", "analysis"]
+    priority = 10
+
+    executor = DocValidator
+    executor_method = "run"
+    executor_dependencies = ["config_manager", "git_agent", "create_fork"]
+    state_dependencies = ["attachment"]
+
+
+class PaperValidationOperation(Operation):
+    name = "validate_paper"
+    description = (
+        "Check if the experiments and methodology from the attached research paper "
+        "can be reproduced using the selected repository."
+    )
+
+    supported_intents = ["new_task"]
+    supported_scopes = ["full_repo", "analysis"]
+    priority = 15
+
+    executor = PaperValidator
+    executor_method = "run"
+    executor_dependencies = ["config_manager", "git_agent", "create_fork"]
+    state_dependencies = ["attachment"]
+
+
+class ConvertNotebooksArgs(BaseModel):
+    notebook_paths: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of .ipynb files or directories to convert. "
+            "Example: ['notebooks/analysis.ipynb', 'research/']"
+        ),
+    )
+
+
+class ConvertNotebooksOperation(Operation):
+    name = "convert_notebooks"
+    description = "Convert Jupyter notebooks (.ipynb) into Python scripts with cleaned code."
+
+    supported_intents = ["new_task"]
+    supported_scopes = ["full_repo", "codebase"]
+    priority = 30
+
+    args_schema = ConvertNotebooksArgs
+    args_policy = "auto"
+
+    executor = NotebookConverter
+    executor_method = "convert_notebooks"
+    executor_dependencies = ["config_manager"]
+
+
+class TranslateRepositoryStructureOperation(Operation):
+    name = "translate_dirs"
+    description = "Translate directories and files into English"
+
+    supported_intents = ["new_task"]
+    supported_scopes = ["full_repo", "codebase"]
+    priority = 40
+
+    executor = RepositoryStructureTranslator
+    executor_method = "rename_directories_and_files"
+    executor_dependencies = ["config_manager"]
+
+
+class GenerateDocstringsArgs(BaseModel):
+    ignore_list: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of directories or files to ignore during docstring generation. "
+            "Example: ['tests', 'moduleA/featureB', '__init__.py']"
+        ),
+    )
+
+
+class GenerateDocstringsOperation(Operation):
+    name = "generate_docstrings"
+    description = "Generate and update docstrings across the codebase"
+
+    supported_intents = ["new_task", "feedback"]
+    supported_scopes = ["full_repo", "codebase"]
+    priority = 50
+
+    args_schema = GenerateDocstringsArgs
+    args_policy = "auto"
+
+    executor = DocstringsGenerator
+    executor_method = "run"
+    executor_dependencies = ["config_manager"]
+
+
+class EnsureLicenseArgs(BaseModel):
+    license_type: Literal["bsd-3", "mit", "ap2"] = Field("bsd-3", description="License type to set for the repository.")
+
+
+class EnsureLicenseOperation(Operation):
+    name = "ensure_license"
+    description = "Ensure LICENSE file exists"
+
+    supported_intents = ["new_task"]
+    supported_scopes = ["full_repo", "docs"]
+    priority = 60
+
+    args_schema = EnsureLicenseArgs
+    args_policy = "auto"
+
+    executor = LicenseCompiler
+    executor_method = "run"
+    executor_dependencies = ["config_manager", "metadata"]
+
+
+class GenerateCommunityDocsOperation(Operation):
+    name = "generate_documentation"
+    description = "Generate additional documentation files (e.g., CONTRIBUTING, CODE_OF_CONDUCT)."
+
+    supported_intents = ["new_task"]
+    supported_scopes = ["full_repo", "docs"]
+    priority = 65
+
+    executor = staticmethod(generate_documentation)
+    executor_method = None
+    executor_dependencies = ["config_manager", "metadata"]
+
+
+class RequirementsGeneratorOperation(Operation):
+    name = "generate_requirements"
+    description = "Generate requirements.txt using pipreqs"
+
+    supported_intents = ["new_task"]
+    supported_scopes = ["full_repo", "codebase"]
+    priority = 67
+
+    executor = RequirementsGenerator
+    executor_method = "generate"
+    executor_dependencies = ["config_manager"]
+
+
+class GenerateReadmeOperation(Operation):
+    name = "generate_readme"
+    description = "Generate or improve README.md for the repository"
+
+    supported_intents = ["new_task", "feedback"]
+    supported_scopes = ["full_repo", "docs"]
+    priority = 70
+
+    executor = ReadmeAgent
+    executor_method = "generate_readme"
+    executor_dependencies = ["config_manager", "metadata"]
+    state_dependencies = ["attachment", "active_request"]
+
+
+class TranslateReadmeArgs(BaseModel):
+    languages: List[str] = Field(
+        ...,
+        description="List of languages to translate README.md into. Example: ['Russian', 'Swedish']",
+    )
+
+
+class TranslateReadmeOperation(Operation):
+    name = "translate_readme"
+    description = "Translate README.md into another language"
+
+    supported_intents = ["new_task", "feedback"]
+    supported_scopes = ["full_repo", "docs"]
+    priority = 75
+
+    args_schema = TranslateReadmeArgs
+    args_policy = "ask_if_missing"
+
+    executor = ReadmeTranslator
+    executor_method = "translate_readme"
+    executor_dependencies = ["config_manager", "metadata"]
+
+
+class GenerateAboutOperation(Operation):
+    name = "generate_about"
+    description = "Generate About section with tags."
+
+    supported_intents = ["new_task"]
+    supported_scopes = ["full_repo", "docs"]
+    priority = 80
+
+    executor = AboutGenerator
+    executor_method = "generate_about_content"
+    executor_dependencies = ["config_manager", "git_agent"]
+
+
+class GenerateWorkflowsArgs(BaseModel):
+    include_black: bool = Field(True, description="Generate Black code formatter workflow.")
+    include_tests: bool = Field(True, description="Generate unit tests workflow.")
+    include_pep8: bool = Field(True, description="Generate PEP 8 compliance check workflow.")
+    include_autopep8: bool = Field(False, description="Generate autopep8 auto-fix workflow.")
+    include_fix_pep8: bool = Field(False, description="Generate fix-pep8 slash-command workflow.")
+    include_pypi: bool = Field(False, description="Generate PyPI publish workflow.")
+    pep8_tool: Literal["flake8", "pylint"] = Field("flake8", description="Tool for PEP 8 checking.")
+    use_poetry: bool = Field(False, description="Use Poetry for PyPI packaging.")
+    include_codecov: bool = Field(True, description="Include Codecov coverage upload step.")
+    python_versions: List[str] = Field(
+        default_factory=lambda: ["3.9", "3.10"],
+        description="Python versions to test against. Example: ['3.10', '3.11', '3.12']",
+    )
+    branches: List[str] = Field(
+        default_factory=lambda: ["main", "master"],
+        description="Git branches to trigger workflows on.",
+    )
+
+
+class GenerateWorkflowsOperation(Operation):
+    name = "generate_workflows"
+    description = "Generate CI/CD workflow files (GitHub Actions / GitLab CI) for the repository."
+
+    supported_intents = ["new_task", "feedback"]
+    supported_scopes = ["full_repo", "codebase"]
+    priority = 85
+
+    args_schema = GenerateWorkflowsArgs
+    args_policy = "auto"
+
+    executor = WorkflowsExecutor
+    executor_method = "generate"
+    executor_dependencies = ["config_manager", "workflow_manager"]
+
+
+class OrganizeRepositoryOperation(Operation):
+    name = "organize"
+    description = (
+        "Organize the repository structure by adding standard 'tests' and "
+        "'examples' directories if missing and moving matching files."
+    )
+
+    supported_intents = ["new_task"]
+    supported_scopes = ["full_repo", "codebase"]
+    priority = 90
+
+    executor = RepoOrganizer
+    executor_method = "organize"
+    executor_dependencies = ["config_manager"]
+
+
+def register_all_operations(generate_docs: bool = True):
+    """
+    Auto-register all Operation subclasses declared in this module
+    AND optionally regenerate markdown documentation.
+    """
+    current_module = globals()
+
+    # Register all operations dynamically
+    for obj in current_module.values():
+        if inspect.isclass(obj) and issubclass(obj, Operation) and obj is not Operation:
+            OperationRegistry.register(obj())
+
+    docs_path = os.path.join(os.path.dirname(osa_project_root()), "docs", "core", "operations", "OPERATIONS.md")
+    if generate_docs:
+        generate_operations_markdown(docs_path)
+
+
+def generate_operations_markdown(path: str):
+    """
+    Generates a Markdown file enumerating all operations in table format.
+    Intended for developers.
+    """
+    operations = sorted(OperationRegistry.list_all(), key=lambda operation: operation.priority)
+
+    lines = [
+        "# Available Operations",
+        "",
+        "This document is auto-generated. Do not edit manually.",
+        "",
+        "---",
+        "",
+        "| Name | Priority | Intents | Scopes | Args Schema | Executor | Method |",
+        "|------|----------|---------|--------|-------------|----------|--------|",
+    ]
+
+    for op in operations:
+        name = f"`{op.name}`"
+        priority = str(op.priority)
+        intents = ", ".join(op.supported_intents)
+        scopes = ", ".join(op.supported_scopes)
+        args_schema = op.args_schema.__name__ if op.args_schema else "—"
+
+        # Executor formatting
+        if hasattr(op.executor, "__name__"):
+            executor = op.executor.__name__
+        else:
+            executor = str(op.executor)
+
+        method = op.executor_method or "—"
+
+        lines.append(f"| {name} | {priority} | {intents} | {scopes} | {args_schema} | `{executor}` | `{method}` |")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))

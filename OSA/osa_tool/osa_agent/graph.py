@@ -1,0 +1,78 @@
+from typing import Any
+
+from langgraph.constants import END
+from langgraph.graph import StateGraph
+
+from OSA.osa_tool.core.models.agent_status import AgentStatus
+from OSA.osa_tool.osa_agent.agents.executor.agent import ExecutorAgent
+from OSA.osa_tool.osa_agent.agents.finalizer.agent import FinalizerAgent
+from OSA.osa_tool.osa_agent.agents.intent_router.agent import IntentRouterAgent
+from OSA.osa_tool.osa_agent.agents.planner.agent import PlannerAgent
+from OSA.osa_tool.osa_agent.agents.repo_analysis.agent import RepoAnalysisAgent
+from OSA.osa_tool.osa_agent.agents.reviewer.agent import ReviewerAgent
+from OSA.osa_tool.osa_agent.context import AgentContext
+from OSA.osa_tool.osa_agent.state import OSAState
+
+
+def build_graph(context: AgentContext) -> Any:
+    """
+    Build and compile the OSA agent execution graph.
+
+    The graph defines the full workflow lifecycle, including:
+    - intent routing
+    - repository analysis
+    - task planning
+    - task execution
+    - review and approval
+    - finalization
+
+    Transitions between nodes may be conditional based on the current
+    workflow state.
+
+    Args:
+        context (AgentContext): Shared execution context for all agents.
+
+    Returns:
+        Compiled StateGraph executable for running the workflow.
+    """
+    # instantiate agents
+    intent_router = IntentRouterAgent(context)
+    repo_analysis = RepoAnalysisAgent(context)
+    planner = PlannerAgent(context)
+    executor = ExecutorAgent(context)
+    reviewer = ReviewerAgent(context)
+    finalizer = FinalizerAgent(context)
+
+    graph = StateGraph(OSAState)
+
+    graph.add_node("intent_router", intent_router.run)
+    graph.add_node("repo_analysis", repo_analysis.run)
+    graph.add_node("planner", planner.run)
+    graph.add_node("executor", executor.run)
+    graph.add_node("reviewer", reviewer.run)
+    graph.add_node("finalizer", finalizer.run)
+
+    graph.set_entry_point("intent_router")
+
+    # intent_router → repo_analysis | intent_router
+    graph.add_conditional_edges(
+        "intent_router",
+        lambda state: ("intent_router" if state.status == AgentStatus.WAITING_FOR_USER else "repo_analysis"),
+    )
+
+    graph.add_edge("repo_analysis", "planner")
+    # planner → executor | planner
+    graph.add_conditional_edges(
+        "planner", lambda state: ("planner" if state.status == AgentStatus.WAITING_FOR_USER else "executor")
+    )
+    graph.add_edge("executor", "reviewer")
+
+    # reviewer → finalizer | planner
+    graph.add_conditional_edges(
+        "reviewer",
+        lambda state: ("finalizer" if state.approval else "planner"),
+    )
+
+    graph.add_edge("finalizer", END)
+
+    return graph.compile()

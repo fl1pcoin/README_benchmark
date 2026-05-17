@@ -1,0 +1,100 @@
+import os
+
+import tomli
+
+from OSA.osa_tool.utils.utils import osa_project_root
+
+
+class PromptBuilderError(Exception):
+    """Base exception for PromptBuilder errors."""
+
+
+class PromptLoadError(PromptBuilderError):
+    """Raised when loading prompts from a file fails."""
+
+
+class PromptFormatError(PromptBuilderError):
+    """Raised when formatting the prompt with arguments fails."""
+
+
+class PromptBuilder:
+    @staticmethod
+    def render(template: str, safe: bool = False, **kwargs) -> str:
+        """
+        Render template using Python's format(), unless safe=True.
+        """
+        try:
+            if safe:
+                return template
+            return template.format(**kwargs)
+        except KeyError as e:
+            missing = e.args[0]
+            raise PromptBuilderError(f"Missing argument for prompt rendering: '{missing}'")
+        except Exception as e:
+            raise PromptBuilderError(f"Failed to render prompt: {e}")
+
+
+class PromptLoader:
+    """
+    Loads all prompt TOML files inside: osa_tool/config/prompts/
+
+    Allows accessing prompts using keys like:
+        "readme.translate"
+        "readme.prompts.section_generate"
+        "readme.system_messages.base"
+    """
+
+    def __init__(self):
+        self.prompts_dir = os.path.join(osa_project_root(), "config", "prompts")
+        self.cache: dict[str, dict[str, str]] = {}
+        self._load_all()
+
+    def _load_all(self):
+        """Load all TOML prompt files (including nested directories) into memory."""
+        if not os.path.exists(self.prompts_dir):
+            raise PromptLoadError(f"Prompts directory not found: {self.prompts_dir}")
+
+        for root, _, files in os.walk(self.prompts_dir):
+            for filename in files:
+                if not filename.endswith(".toml"):
+                    continue
+
+                path = os.path.join(root, filename)
+                rel_path = os.path.relpath(path, self.prompts_dir)
+                # Example: "readme/system_messages.toml" -> "readme.system_messages"
+                section_name = os.path.splitext(rel_path)[0].replace(os.sep, ".")
+
+                try:
+                    with open(path, "rb") as f:
+                        data = tomli.load(f)
+                except Exception as e:
+                    raise PromptLoadError(f"Failed to parse {rel_path}: {e}") from e
+
+                if "prompts" not in data:
+                    raise PromptLoadError(f"No [prompts] section in {rel_path}")
+
+                self.cache[section_name] = data["prompts"]
+
+    def get(self, key: str) -> str:
+        """
+        Get a prompt by global key: "<section_path>.<prompt_name>".
+
+        Examples:
+            get("readme.translate")
+            get("readme.prompts.section_generate")
+            get("readme.system_messages.base")
+
+        Raises:
+            PromptLoadError: If section or key does not exist.
+        """
+        if "." not in key:
+            raise PromptLoadError(
+                f"Invalid prompt key '{key}'. Expected format: section.name (e.g. 'readme.translate')"
+            )
+
+        section, name = key.rsplit(".", 1)
+
+        try:
+            return self.cache[section][name]
+        except KeyError:
+            raise PromptLoadError(f"Prompt '{key}' not found in loaded prompts")

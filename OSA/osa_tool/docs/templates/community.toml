@@ -1,0 +1,404 @@
+code_of_conduct = """
+# Contributor Covenant Code of Conduct
+
+## Our Pledge
+
+In the interest of fostering an open and welcoming environment, we as
+contributors and maintainers pledge to make participation in our project and
+our community a harassment-free experience for everyone, regardless of age, body
+size, disability, ethnicity, sex characteristics, gender identity and expression,
+level of experience, education, socio-economic status, nationality, personal
+appearance, race, religion, or sexual identity and orientation.
+
+## Our Standards
+
+Examples of behavior that contributes to creating a positive environment
+include:
+
+* Using welcoming and inclusive language
+* Being respectful of differing viewpoints and experiences
+* Gracefully accepting constructive criticism
+* Focusing on what is best for the community
+* Showing empathy towards other community members
+
+Examples of unacceptable behavior by participants include:
+
+* The use of sexualized language or imagery and unwelcome sexual attention or
+  advances
+* Trolling, insulting/derogatory comments, and personal or political attacks
+* Public or private harassment
+* Publishing others' private information, such as a physical or electronic
+  address, without explicit permission
+* Other conduct which could reasonably be considered inappropriate in a
+  professional setting
+
+## Our Responsibilities
+
+Project maintainers are responsible for clarifying the standards of acceptable
+behavior and are expected to take appropriate and fair corrective action in
+response to any instances of unacceptable behavior.
+
+Project maintainers have the right and responsibility to remove, edit, or
+reject comments, commits, code, wiki edits, issues, and other contributions
+that are not aligned to this Code of Conduct, or to ban temporarily or
+permanently any contributor for other behaviors that they deem inappropriate,
+threatening, offensive, or harmful.
+
+## Scope
+
+This Code of Conduct applies within all project spaces, and it also applies when
+an individual is representing the project or its community in public spaces.
+Examples of representing a project or community include using an official
+project e-mail address, posting via an official social media account, or acting
+as an appointed representative at an online or offline event. Representation of
+a project may be further defined and clarified by project maintainers.
+
+## Enforcement
+
+Project maintainers who do not follow or enforce the Code of Conduct in good
+faith may face temporary or permanent repercussions as determined by other
+members of the project's leadership.
+
+## Attribution
+
+This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4,
+available at https://www.contributor-covenant.org/version/1/4/code-of-conduct.html
+
+[homepage]: https://www.contributor-covenant.org
+
+For answers to common questions about this code of conduct, see
+https://www.contributor-covenant.org/faq
+"""
+
+pull_request = """
+<!--
+  Thanks for creating a Pull Request! Before you submit, please make sure
+  you've done the following:
+
+  - I read the contributing document at {contributing_url}
+-->
+
+<!--
+  Help us quickly understand your PR! Choose one of the following by uncommenting it:
+-->
+
+<!-- This is a 🐛 Bug fix -->
+<!-- This is a ✨ New feature -->
+<!-- This is a 📝 Documentation update -->
+<!-- This is a 🔨 Code refactoring -->
+<!-- This is a 📦 Dependency update -->
+<!-- This is a ⚙️ Build/CI improvement -->
+
+---
+
+## Checklist
+
+Please check all that apply (`x` inside `[ ]`):
+
+- [ ] I've performed a self-review of my code
+- [ ] I've run linters and tests locally before submission
+- [ ] I've added tests (if it's a bug, feature or enhancement)
+- [ ] I've adjusted the documentation (if it's a feature or enhancement)
+
+## Summary
+
+<!--
+  Provide a description of what your pull request changes.
+-->
+
+## Context
+
+<!--
+  Is this related to any GitHub issue(s)?
+
+  You can use keywords to automatically close the related issue.
+  For example, (all of) the following will close issue #4567 when your PR is merged.
+
+  Closes #4567
+  Fixes #4567
+  Resolves #4567
+
+  Use any one of the above as applicable.
+-->
+
+## Additional Notes
+
+Add any additional context for reviewers (questions, implementation details, suggestions):
+"""
+
+docs_issue = """
+---
+name: Documentation
+about: Found a typo or something that isn't crystal clear in our docs?
+title: "[Docs]: "
+labels: documentation
+assignees: ''
+
+---
+
+<!-- Thanks for taking the time to open an issue and help us make project better! -->
+
+## Motivation
+
+<!-- Why should we update our docs? -->
+
+
+
+## Suggestion
+
+<!-- What should we do instead? -->
+
+"""
+
+feature_issue = """
+---
+name: Feature request
+about: Want us to add any features to {project_name}?
+title: 'enh: '
+labels: enhancement
+assignees: ''
+
+---
+
+<!--
+  Hi! Thanks for considering to file a feature request with {project_name}. Please take the time to
+  answer the basic questions. Please try to be as detailed as possible.
+
+  Thanks!
+-->
+
+## Summary
+
+<!--
+  A one-paragraph explanation of the feature.
+-->
+
+## Motivation
+
+<!--
+  Why do you want to see this feature in {project_name}? What use cases does it support?
+-->
+
+## Guide-level explanation
+
+<!--
+  Explain the proposal as if it was already included in the project and you
+  were teaching it to another programmer. That generally means:
+
+  - Introducing new named concepts.
+  - Explaining the feature largely in terms of examples.
+  - If applicable, provide sample error messages, deprecation warnings, or
+    migration guidance.
+
+  If this is a small feature, you may omit this section.
+-->
+
+## Reference-level explanation
+
+<!--
+  This is the technical portion of the feature request. Explain the design in
+  sufficient detail that:
+
+  - Its interaction with other features is clear.
+  - It is reasonably clear how the feature would be implemented.
+  - Corner cases are dissected by example.
+
+  If you do not know how to answer this, you can omit it. No worries!
+-->
+
+## Drawbacks
+
+<!--
+  Why should we *not* do this?
+-->
+
+## Unresolved Questions
+
+<!--
+  What related issues do you consider out of scope for this feature that could be
+  addressed in the future independently of the solution that comes out of this
+  feature?
+-->
+"""
+
+bug_issue = """
+---
+name: Bug report
+about: Is something not working as expected?
+title: "[Bug]: "
+labels: bug
+assignees: ''
+
+---
+
+Hi! Thank you for taking the time to report a bug with {project_name}.
+
+Additionally, please note that this platform is meant for bugs in {project_name} only.
+Issues regarding dependencies and libraries should be reported in their respective repositories.
+
+<!--- Provide a general summary of the issue in the Title above -->
+
+## Expected Behavior
+<!--- If you're suggesting a change/improvement, tell us how it should work -->
+
+## Current Behavior
+<!--- If suggesting a change/improvement, explain the difference from current behavior -->
+
+## Possible Solution
+<!--- Not obligatory, but suggest a fix/reason -->
+<!--- or ideas how to implement the addition or change -->
+
+## Steps to Reproduce
+<!--- Provide a link to a live example -->
+
+## Context [OPTIONAL]
+<!--- How has this issue affected you? What are you trying to accomplish? -->
+<!--- Providing context helps us come up with a solution that is most useful in the real world -->
+"""
+
+vulnerability_disclosure = """
+<!---
+Please read this!
+
+This template is for reporting a security vulnerability about GitLab or 
+GitLab.com
+
+See also:
+
+- https://about.gitlab.com/security/disclosure/
+
+--->
+
+### Summary
+
+<!-- Summarize the bug encountered concisely. -->
+
+### Steps to reproduce
+
+<!-- Describe how one can reproduce the issue - this is very important. Please use an ordered list. -->
+
+### Example Project
+
+<!-- If possible, please create an example project here on GitLab.com that exhibits the problematic 
+behavior, and link to it here in the bug report. If you are using an older version of GitLab, this 
+will also determine whether the bug is fixed in a more recent version. -->
+
+### What is the current *bug* behavior?
+
+<!-- Describe what actually happens. -->
+
+### What is the expected *correct* behavior?
+
+<!-- Describe what you should see instead. -->
+
+### Relevant logs and/or screenshots
+
+<!-- Paste any relevant logs - please use code blocks (```) to format console output, logs, and code
+ as it's tough to read otherwise. -->
+
+### Output of checks
+
+<!-- If you are reporting a bug on GitLab.com, write: This bug happens on GitLab.com -->
+
+#### Results of GitLab environment info
+
+<!--  Input any relevant GitLab environment information if needed. -->
+
+<details>
+<summary>Expand for output related to GitLab environment info</summary>
+
+<pre>
+
+(For installations with omnibus-gitlab package run and paste the output of:
+`sudo gitlab-rake gitlab:env:info`)
+
+(For installations from source run and paste the output of:
+`sudo -u git -H bundle exec rake gitlab:env:info RAILS_ENV=production`)
+
+</pre>
+</details>
+
+#### Results of GitLab application Check
+
+<!--  Input any relevant GitLab application check information if needed. -->
+
+<details>
+<summary>Expand for output related to the GitLab application check</summary>
+<pre>
+
+(For installations with omnibus-gitlab package run and paste the output of:
+`sudo gitlab-rake gitlab:check SANITIZE=true`)
+
+(For installations from source run and paste the output of:
+`sudo -u git -H bundle exec rake gitlab:check RAILS_ENV=production SANITIZE=true`)
+
+(we will only investigate if the tests are passing)
+
+</pre>
+</details>
+
+### Possible fixes
+
+<!-- If you can, link to the line of code that might be responsible for the problem. -->
+
+
+---
+
+<!-- Do not edit past here unless you are certain of the impact -->
+"""
+
+security_github = """ 
+# Reporting Security Issues
+
+Our team take security bugs seriously. We appreciate your efforts to responsibly disclose your 
+findings, and will make every effort to acknowledge your contributions.
+
+To report a security issue, please use the GitHub Security Advisory 
+["Report a Vulnerability"]({repo_url}/security/advisories/new) tab.
+"""
+
+security_gitlab = """
+# Security Policy
+
+## Reporting a Vulnerability
+
+Use [the Vulnerability Disclosure issue template]({repo_url}/-/issues/new?issuable_template=Vulnerability%20Disclosure) to report a new security vulnerability.
+
+New security issue should follow these guidelines when being created on `GitLab.com`:
+
+- Create new issues as `confidential` if unsure whether issue a potential
+vulnerability or not. It is easier to make an issue that should have been
+public open than to remediate an issue that should have been confidential.
+Consider adding the `/confidential` quick action to a project issue template.
+
+- Always label as ``~security`` at a minimum. If you're reporting a vulnerability (or something you suspect may possibly be one) please use the [Vulnerability Disclosure](https://gitlab.com/gitlab-org/gitlab/-/issues/new?issuable_template=Vulnerability%20Disclosure) template while creating the issue. Otherwise, follow the steps here (with a security label).
+
+- Add any additional labels you know apply. Additional labels will be applied
+by the security team and other engineering personnel, but it will help with
+the triage process:
+
+  - [`~"type::bug"`, `~"type::maintenance"`, or `~"type::feature"` if appropriate](https://handbook.gitlab.com/handbook/security/product-security/application-security/vulnerability-management/#vulnerability-vs-feature-vs-bug)
+  - Team or DevOps lifecycle labels
+  - `~customer` if issue is a result of a customer report
+  - `~internal customer` should be added by team members when the issue
+    impacts GitLab operations.
+  - `~dependency update` if issue is related to updating to newer versions of the dependencies GitLab requires.
+  - `~featureflag::` scoped labels if issue is for a functionality behind a feature flag
+
+- Issues that contain customer specific data, such as private repository contents,
+should be assigned `~keep confidential`. If possible avoid this by linking
+resources only available to GitLab team member. Label the link with `(GitLab internal)` for clarity.
+
+Occasionally, data that should remain confidential, such as the private
+project contents of a user that reported an issue, may get included in an
+issue. If necessary, a sanitized issue may need to be created with more
+general discussion and examples appropriate for public disclosure prior to
+release.
+"""
+
+security_gitverse = """
+# Reporting Security Issues
+
+Our team take security bugs seriously. We appreciate your efforts to responsibly disclose your 
+findings, and will make every effort to acknowledge your contributions.
+"""
