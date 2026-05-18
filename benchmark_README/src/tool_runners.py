@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import textwrap
@@ -339,28 +340,249 @@ def _readmeready_code() -> str:
     )
 
 
+def _readmeready_batch_code() -> str:
+    return textwrap.dedent(
+        r"""
+        import importlib
+        import json
+        import shutil
+        import sys
+        import time
+        import traceback
+        import types
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        from ReadMeReady_eval.readme_ready.types import AutodocReadmeConfig, AutodocRepoConfig, AutodocUserConfig, LLMModels
+
+        def utc_now_iso():
+            return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        model_value = sys.argv[1]
+        manifest_path = Path(sys.argv[2])
+        status_path = Path(sys.argv[3])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        model = next((m for m in LLMModels if m.value == model_value), None)
+        if model is None:
+            raise SystemExit(f"Unsupported ReadMeReady model: {model_value}")
+
+        def fallback_from_buffer(content, mime=True):
+            try:
+                content.decode("utf-8")
+                return "text/plain" if mime else "text"
+            except Exception:
+                return "application/octet-stream" if mime else "binary"
+
+        sys.modules.setdefault("magic", types.SimpleNamespace(from_buffer=fallback_from_buffer))
+
+        embeddings_cache = {}
+
+        def stable_embeddings(_model, device):
+            from langchain_huggingface import HuggingFaceEmbeddings
+            if device == "auto":
+                device = None
+            key = (device or "cpu")
+            if key not in embeddings_cache:
+                embeddings_cache[key] = HuggingFaceEmbeddings(
+                    model_name="sentence-transformers/all-mpnet-base-v2",
+                    model_kwargs={"device": device},
+                    encode_kwargs={"normalize_embeddings": True},
+                )
+            return embeddings_cache[key]
+
+        def file_only_traverse(params):
+            from pathlib import Path
+            from ReadMeReady_eval.readme_ready.types import ProcessFileParams
+            import fnmatch
+
+            root = Path(params.input_path)
+
+            def should_ignore(name):
+                return any(fnmatch.fnmatch(name, pattern) for pattern in params.ignore)
+
+            for entry in root.rglob("*"):
+                if any(should_ignore(part) for part in entry.relative_to(root).parts):
+                    continue
+                if not entry.is_file():
+                    continue
+                try:
+                    data = entry.read_bytes()
+                    if fallback_from_buffer(data, mime=True).startswith("text/") and params.process_file:
+                        params.process_file(
+                            ProcessFileParams(
+                                entry.name,
+                                str(entry),
+                                params.project_name,
+                                params.content_type,
+                                params.file_prompt,
+                                params.target_audience,
+                                params.link_hosted,
+                            )
+                        )
+                except Exception:
+                    continue
+
+        llm_utils = importlib.import_module("ReadMeReady_eval.readme_ready.utils.llm_utils")
+        llm_utils.get_embeddings = stable_embeddings
+        from ReadMeReady_eval.readme_ready.types import LLMModelDetails
+        llm_utils.models[model] = LLMModelDetails(
+            name=model,
+            input_cost_per_1k_tokens=0.0,
+            output_cost_per_1k_tokens=0.0,
+            max_length=16000,
+            llm=llm_utils.get_openai_chat_model(
+                model.value,
+                temperature=0.1,
+                streaming=False,
+                model_kwargs={"frequency_penalty": 0.0, "presence_penalty": 0.0},
+            ),
+            input_tokens=0,
+            output_tokens=0,
+            succeeded=0,
+            failed=0,
+            total=0,
+        )
+        traverse_mod = importlib.import_module("ReadMeReady_eval.readme_ready.utils.traverse_file_system")
+        traverse_mod.traverse_file_system = file_only_traverse
+        process_repo_mod = importlib.import_module("ReadMeReady_eval.readme_ready.index.process_repository")
+        process_repo_mod.traverse_file_system = file_only_traverse
+        process_repo_mod.models = llm_utils.models
+        process_repo_mod.select_model = lambda prompts, llms, models, priority: models.get(llms[0])
+        vector_store_mod = importlib.import_module("ReadMeReady_eval.readme_ready.index.create_vector_store")
+        vector_store_mod.get_embeddings = stable_embeddings
+        convert_mod = importlib.import_module("ReadMeReady_eval.readme_ready.index.convert_json_to_markdown")
+        convert_mod.traverse_file_system = file_only_traverse
+        query_mod = importlib.import_module("ReadMeReady_eval.readme_ready.query.query")
+        query_mod.get_embeddings = stable_embeddings
+        query_mod.clear = lambda: None
+        from ReadMeReady_eval.readme_ready.index import index
+        from ReadMeReady_eval.readme_ready.query import query
+
+        rows = []
+
+        def flush():
+            status_path.parent.mkdir(parents=True, exist_ok=True)
+            status_path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        for item in manifest:
+            started = utc_now_iso()
+            start = time.time()
+            repo_slug = item["repo_slug"]
+            output_path = Path(item["output_path"])
+            try:
+                repo_root = Path(item["repo_root"])
+                work_dir = Path(item["work_dir"])
+                work_dir.mkdir(parents=True, exist_ok=True)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                config = AutodocRepoConfig(
+                    name=repo_slug,
+                    repository_url=item["repo_url"],
+                    root=str(repo_root),
+                    output=str(work_dir),
+                    llms=[model],
+                    priority=None,
+                    max_concurrent_calls=8,
+                    add_questions=False,
+                    ignore=[".*", "*package-lock.json", "*package.json", "node_modules", "*dist*", "*build*", "*test*", "*.svg", "*.md", "*.mdx", "*.toml"],
+                    file_prompt="Write a concise technical explanation of this code file in markdown.",
+                    folder_prompt="Write a concise technical explanation of this folder in markdown.",
+                    chat_prompt="",
+                    content_type="code",
+                    target_audience="developer",
+                    link_hosted=True,
+                    peft_model_path=None,
+                    device="cpu",
+                )
+                user = AutodocUserConfig(llms=[model])
+                readme = AutodocReadmeConfig("Description,Requirements,Installation,Usage,Contributing,License")
+                index.index(config)
+                query.generate_readme(config, user, readme)
+                candidates = sorted((work_dir / "docs" / "data").glob("README_*.md"))
+                if not candidates:
+                    raise RuntimeError("ReadMeReady did not produce README_*.md")
+                shutil.copy2(candidates[0], output_path)
+                status = "done"
+                error = ""
+            except Exception:
+                status = "failed"
+                error = traceback.format_exc()
+            rows.append(
+                {
+                    "repo_slug": repo_slug,
+                    "status": status,
+                    "started_at": started,
+                    "finished_at": utc_now_iso(),
+                    "duration_sec": round(time.time() - start, 3),
+                    "output_path": str(output_path),
+                    "error": error,
+                }
+            )
+            flush()
+        """
+    )
+
+
 def run_readmeready(repo_df: pd.DataFrame, paths: BenchmarkPaths, model: str, *, reset: bool = False) -> pd.DataFrame:
     label = model_label(model)
     tool_root = paths.workspace_root / "ReadMeReady_eval"
     py = _python_exe(tool_root)
     rows = []
+    pending = []
+    model_log = paths.logs_dir / "readmeready" / label / "_batch.log"
+    tool_dir = paths.tools_dir / "readmeready" / label
     for repo in repo_df.itertuples():
         output = paths.tools_dir / "readmeready" / label / f"{repo.repo_slug}_README.md"
-        log = paths.logs_dir / "readmeready" / label / f"{repo.repo_slug}.log"
+        log = model_log
         started = utc_now_iso()
-        start = time.time()
         if output.is_file() and not reset:
             rows.append(_status_row(tool="readmeready", model=model, repo_slug=repo.repo_slug, status="done", started_at=started, output_path=output, log_path=log))
             continue
         work_dir = paths.tools_dir / "readmeready" / label / "_work" / repo.repo_slug
-        cmd = [py, "-c", _readmeready_code(), paths.repositories_dir / repo.repo_slug, repo.repo_url, repo.repo_slug, _tool_model(model), work_dir, output]
+        pending.append(
+            {
+                "repo_slug": repo.repo_slug,
+                "repo_url": repo.repo_url,
+                "repo_root": str(paths.repositories_dir / repo.repo_slug),
+                "work_dir": str(work_dir),
+                "output_path": str(output),
+            }
+        )
+    if pending:
+        tool_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = tool_dir / "_batch_manifest.json"
+        status_path = tool_dir / "_batch_status.json"
+        manifest_path.write_text(json.dumps(pending, indent=2, ensure_ascii=False), encoding="utf-8")
+        if status_path.is_file():
+            status_path.unlink()
+        cmd = [py, "-c", _readmeready_batch_code(), _tool_model(model), manifest_path, status_path]
         status, error = _run(
             cmd,
             cwd=paths.workspace_root,
-            log_path=log,
+            log_path=model_log,
             env=_env({"PYTHONPATH": str(paths.workspace_root)}),
         )
-        rows.append(_status_row(tool="readmeready", model=model, repo_slug=repo.repo_slug, status=status if output.is_file() else status, started_at=started, output_path=output, log_path=log, error=error, duration_sec=time.time() - start))
+        if status_path.is_file():
+            batch_rows = json.loads(status_path.read_text(encoding="utf-8"))
+            for item in batch_rows:
+                rows.append(
+                    {
+                        "tool": "readmeready",
+                        "model": model,
+                        "model_label": label,
+                        "repo_slug": item["repo_slug"],
+                        "status": item["status"],
+                        "started_at": item["started_at"],
+                        "finished_at": item["finished_at"],
+                        "duration_sec": item["duration_sec"],
+                        "output_path": item["output_path"],
+                        "log_path": str(model_log),
+                        "error": item.get("error", ""),
+                    }
+                )
+        else:
+            for item in pending:
+                rows.append(_status_row(tool="readmeready", model=model, repo_slug=item["repo_slug"], status=status, started_at=utc_now_iso(), output_path=Path(item["output_path"]), log_path=model_log, error=error))
     return _append_status(paths, rows)
 
 
