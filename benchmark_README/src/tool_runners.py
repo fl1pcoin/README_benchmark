@@ -27,6 +27,10 @@ def _tool_model(model: str) -> str:
     return model.removeprefix("openai/")
 
 
+def _join_pythonpath(*paths: Path) -> str:
+    return os.pathsep.join(str(path) for path in paths)
+
+
 def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
     env = os.environ.copy()
     if env.get("OPENROUTER_API_KEY"):
@@ -38,6 +42,25 @@ def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def _redact(text: str, env: dict[str, str] | None = None) -> str:
+    redacted = text
+    candidates = [
+        os.getenv("OPENROUTER_API_KEY", ""),
+        os.getenv("OPENAI_API_KEY", ""),
+        os.getenv("GIT_TOKEN", ""),
+        os.getenv("GITHUB_TOKEN", ""),
+        os.getenv("HF_TOKEN", ""),
+    ]
+    if env:
+        candidates.extend(
+            env.get(name, "")
+            for name in ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "GIT_TOKEN", "GITHUB_TOKEN", "HF_TOKEN")
+        )
+    for secret in {value for value in candidates if value}:
+        redacted = redacted.replace(secret, "<REDACTED>")
+    return redacted
+
+
 def _run(
     cmd: list[str],
     *,
@@ -47,11 +70,12 @@ def _run(
     env: dict[str, str] | None = None,
 ) -> tuple[str, str]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    run_env = env or _env()
     try:
         proc = subprocess.run(
             [str(part) for part in cmd],
             cwd=str(cwd),
-            env=env or _env(),
+            env=run_env,
             capture_output=True,
             text=True,
             timeout=timeout_sec,
@@ -60,15 +84,15 @@ def _run(
         )
         log_path.write_text(
             "COMMAND:\n"
-            + " ".join(str(part) for part in cmd)
+            + _redact(" ".join(str(part) for part in cmd), run_env)
             + "\n\nSTDOUT:\n"
-            + proc.stdout
+            + _redact(proc.stdout, run_env)
             + "\n\nSTDERR:\n"
-            + proc.stderr,
+            + _redact(proc.stderr, run_env),
             encoding="utf-8",
         )
         if proc.returncode != 0:
-            return "failed", (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+            return "failed", _redact((proc.stderr or proc.stdout or f"exit {proc.returncode}").strip(), run_env)
         return "done", ""
     except subprocess.TimeoutExpired as exc:
         log_path.write_text(str(exc), encoding="utf-8")
@@ -110,6 +134,8 @@ def _append_status(paths: BenchmarkPaths, rows: list[dict[str, Any]]) -> pd.Data
     old = pd.read_csv(out) if out.is_file() else pd.DataFrame()
     new = pd.DataFrame(rows)
     all_rows = pd.concat([old, new], ignore_index=True) if not old.empty else new
+    if not all_rows.empty:
+        all_rows = all_rows.drop_duplicates(subset=["tool", "model", "repo_slug"], keep="last")
     all_rows.to_csv(out, index=False)
     return all_rows
 
@@ -141,7 +167,12 @@ def run_osa(repo_df: pd.DataFrame, paths: BenchmarkPaths, model: str, *, reset: 
         "--model",
         model,
     ]
-    status, error = _run(cmd, cwd=osa_root, log_path=log_path, env=_env({"PYTHONPATH": str(osa_root)}))
+    status, error = _run(
+        cmd,
+        cwd=paths.workspace_root,
+        log_path=log_path,
+        env=_env({"PYTHONPATH": _join_pythonpath(paths.workspace_root, osa_root / "osa_tool")}),
+    )
     rows = []
     for repo in repo_df.itertuples():
         expected = raw_readmes_dir / f"{repo.repo_slug}_README.md"
@@ -170,26 +201,20 @@ def _readmeready_code() -> str:
         from pathlib import Path
 
         import importlib
+        import sys
+        import types
         from ReadMeReady_eval.readme_ready.types import AutodocReadmeConfig, AutodocRepoConfig, AutodocUserConfig, LLMModels
 
-        def stable_embeddings(_model, device):
-            from langchain_huggingface import HuggingFaceEmbeddings
-            if device == "auto":
-                device = None
-            return HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-mpnet-base-v2",
-                model_kwargs={"device": device},
-                encode_kwargs={"normalize_embeddings": True},
-            )
+        # python-magic needs native libmagic on Windows. For this benchmark we only need
+        # a conservative text-file detector, so install a tiny fallback before modules import it.
+        def fallback_from_buffer(content, mime=True):
+            try:
+                content.decode("utf-8")
+                return "text/plain" if mime else "text"
+            except Exception:
+                return "application/octet-stream" if mime else "binary"
 
-        llm_utils = importlib.import_module("ReadMeReady_eval.readme_ready.utils.llm_utils")
-        llm_utils.get_embeddings = stable_embeddings
-        vector_store_mod = importlib.import_module("ReadMeReady_eval.readme_ready.index.create_vector_store")
-        vector_store_mod.get_embeddings = stable_embeddings
-        query_mod = importlib.import_module("ReadMeReady_eval.readme_ready.query.query")
-        query_mod.get_embeddings = stable_embeddings
-        from ReadMeReady_eval.readme_ready.index import index
-        from ReadMeReady_eval.readme_ready.query import query
+        sys.modules.setdefault("magic", types.SimpleNamespace(from_buffer=fallback_from_buffer))
 
         repo_root = Path(sys.argv[1])
         repo_url = sys.argv[2]
@@ -201,6 +226,85 @@ def _readmeready_code() -> str:
         model = next((m for m in LLMModels if m.value == model_value), None)
         if model is None:
             raise SystemExit(f"Unsupported ReadMeReady model: {model_value}")
+
+        def stable_embeddings(_model, device):
+            from langchain_huggingface import HuggingFaceEmbeddings
+            if device == "auto":
+                device = None
+            return HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-mpnet-base-v2",
+                model_kwargs={"device": device},
+                encode_kwargs={"normalize_embeddings": True},
+            )
+
+        def file_only_traverse(params):
+            from pathlib import Path
+            from ReadMeReady_eval.readme_ready.types import ProcessFileParams
+            import fnmatch
+
+            root = Path(params.input_path)
+
+            def should_ignore(name):
+                return any(fnmatch.fnmatch(name, pattern) for pattern in params.ignore)
+
+            for entry in root.rglob("*"):
+                if any(should_ignore(part) for part in entry.relative_to(root).parts):
+                    continue
+                if not entry.is_file():
+                    continue
+                try:
+                    data = entry.read_bytes()
+                    if fallback_from_buffer(data, mime=True).startswith("text/") and params.process_file:
+                        params.process_file(
+                            ProcessFileParams(
+                                entry.name,
+                                str(entry),
+                                params.project_name,
+                                params.content_type,
+                                params.file_prompt,
+                                params.target_audience,
+                                params.link_hosted,
+                            )
+                        )
+                except Exception:
+                    continue
+
+        llm_utils = importlib.import_module("ReadMeReady_eval.readme_ready.utils.llm_utils")
+        llm_utils.get_embeddings = stable_embeddings
+        from ReadMeReady_eval.readme_ready.types import LLMModelDetails
+        llm_utils.models[model] = LLMModelDetails(
+            name=model,
+            input_cost_per_1k_tokens=0.0,
+            output_cost_per_1k_tokens=0.0,
+            max_length=16000,
+            llm=llm_utils.get_openai_chat_model(
+                model.value,
+                temperature=0.1,
+                streaming=False,
+                model_kwargs={"frequency_penalty": 0.0, "presence_penalty": 0.0},
+            ),
+            input_tokens=0,
+            output_tokens=0,
+            succeeded=0,
+            failed=0,
+            total=0,
+        )
+        traverse_mod = importlib.import_module("ReadMeReady_eval.readme_ready.utils.traverse_file_system")
+        traverse_mod.traverse_file_system = file_only_traverse
+        process_repo_mod = importlib.import_module("ReadMeReady_eval.readme_ready.index.process_repository")
+        process_repo_mod.traverse_file_system = file_only_traverse
+        process_repo_mod.models = llm_utils.models
+        process_repo_mod.select_model = lambda prompts, llms, models, priority: models.get(llms[0])
+        vector_store_mod = importlib.import_module("ReadMeReady_eval.readme_ready.index.create_vector_store")
+        vector_store_mod.get_embeddings = stable_embeddings
+        vector_store_mod.LLMModels = LLMModels
+        convert_mod = importlib.import_module("ReadMeReady_eval.readme_ready.index.convert_json_to_markdown")
+        convert_mod.traverse_file_system = file_only_traverse
+        query_mod = importlib.import_module("ReadMeReady_eval.readme_ready.query.query")
+        query_mod.get_embeddings = stable_embeddings
+        query_mod.clear = lambda: None
+        from ReadMeReady_eval.readme_ready.index import index
+        from ReadMeReady_eval.readme_ready.query import query
 
         work_dir.mkdir(parents=True, exist_ok=True)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,7 +354,12 @@ def run_readmeready(repo_df: pd.DataFrame, paths: BenchmarkPaths, model: str, *,
             continue
         work_dir = paths.tools_dir / "readmeready" / label / "_work" / repo.repo_slug
         cmd = [py, "-c", _readmeready_code(), paths.repositories_dir / repo.repo_slug, repo.repo_url, repo.repo_slug, _tool_model(model), work_dir, output]
-        status, error = _run(cmd, cwd=tool_root, log_path=log, env=_env({"PYTHONPATH": str(tool_root)}))
+        status, error = _run(
+            cmd,
+            cwd=paths.workspace_root,
+            log_path=log,
+            env=_env({"PYTHONPATH": str(paths.workspace_root)}),
+        )
         rows.append(_status_row(tool="readmeready", model=model, repo_slug=repo.repo_slug, status=status if output.is_file() else status, started_at=started, output_path=output, log_path=log, error=error, duration_sec=time.time() - start))
     return _append_status(paths, rows)
 
@@ -261,10 +370,9 @@ def _larch_code() -> str:
         import sys
         from pathlib import Path
 
-        import larch
+        import larch_eval.larch as larch
         from larch_eval.larch.context_creator import ContextCreatorName, Directory
         from larch_eval.larch.postprocessor import postprocess
-        from larch_eval.larch.utils.download import cached_model_download
 
         repo_dir = Path(sys.argv[1])
         repo_slug = sys.argv[2]
@@ -273,13 +381,16 @@ def _larch_code() -> str:
         seed_path = Path(sys.argv[5])
         output_path = Path(sys.argv[6])
 
-        max_generation_length = 200
+        max_generation_length = 3200
         slack_length = 4
 
-        larch_eval.larch.generator.init_models([model], api_key, {})
-        generator = larch_eval.larch.generator.AVAILABLE_MODELS[model]
-        context_creator = ContextCreatorName("entrypoint").get_module()
-        context_creator.init(cached_model_download())
+        larch.generator.init_models([model], api_key, {})
+        generator = larch.generator.AVAILABLE_MODELS[model]
+        # The original "entrypoint" context creator uses signal.SIGALRM, which is
+        # unavailable on Windows. Use file_names as a Windows-safe LArch context.
+        context_creator = ContextCreatorName("file_names").get_module()
+        if hasattr(context_creator, "init"):
+            context_creator.init()
         dir_tree = Directory.from_directory(str(repo_dir))
         context = context_creator.create_context(
             dir_tree,
@@ -291,6 +402,15 @@ def _larch_code() -> str:
         prompt = seed_path.read_text(encoding="utf-8")
         generated, diff = generator.generate(context, prompt, max_length=max_generation_length)
         generated, _ = postprocess(generated, diff)
+        if generated.startswith(prompt):
+            generated = generated[len(prompt):].lstrip()
+        generated = generated.strip()
+        if generated.startswith("```markdown"):
+            generated = generated.removeprefix("```markdown").strip()
+        if generated.startswith("```"):
+            generated = generated.removeprefix("```").strip()
+        if generated.endswith("```"):
+            generated = generated.removesuffix("```").strip()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(generated, encoding="utf-8")
         """
@@ -303,7 +423,10 @@ def run_larch(repo_df: pd.DataFrame, paths: BenchmarkPaths, model: str, *, reset
     py = _python_exe(tool_root)
     seed = paths.tools_dir / "larch" / "seed_prompt.md"
     seed.parent.mkdir(parents=True, exist_ok=True)
-    seed.write_text("# README\n\nGenerate a complete README for this repository.\n", encoding="utf-8")
+    seed.write_text(
+        "# README\n\nGenerate a complete README for this repository. Include overview, installation, usage, configuration, development, testing, and license sections.\n",
+        encoding="utf-8",
+    )
     key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
     rows = []
     for repo in repo_df.itertuples():
@@ -318,7 +441,12 @@ def run_larch(repo_df: pd.DataFrame, paths: BenchmarkPaths, model: str, *, reset
             rows.append(_status_row(tool="larch", model=model, repo_slug=repo.repo_slug, status="skipped", started_at=started, output_path=output, log_path=log, error="OPENROUTER_API_KEY or OPENAI_API_KEY is required"))
             continue
         cmd = [py, "-c", _larch_code(), paths.repositories_dir / repo.repo_slug, repo.repo_slug, _tool_model(model), key, seed, output]
-        status, error = _run(cmd, cwd=tool_root, log_path=log, env=_env({"PYTHONPATH": str(tool_root)}))
+        status, error = _run(
+            cmd,
+            cwd=paths.workspace_root,
+            log_path=log,
+            env=_env({"PYTHONPATH": str(paths.workspace_root)}),
+        )
         rows.append(_status_row(tool="larch", model=model, repo_slug=repo.repo_slug, status="done" if output.is_file() else status, started_at=started, output_path=output, log_path=log, error="" if output.is_file() else error, duration_sec=time.time() - start))
     return _append_status(paths, rows)
 
