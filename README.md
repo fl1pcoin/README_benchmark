@@ -5,13 +5,14 @@
 - `OSA`
 - `LArch`
 - `ReadMeReady`
+- `OpenCode`
 
 Главная точка запуска находится в `benchmark_README/README_benchmark.ipynb`. Ноутбук подготавливает датасет, клонирует тестовые репозитории, сохраняет оригинальные README и структуру проектов, запускает выбранные инструменты и оценивает полученные README через `DeepEval GEval`.
 
 ## Структура проекта
 
 ```text
-VKR_README_EVAL/
+README_benchmark/
   benchmark_README/
     data/repo_list.csv
     results/
@@ -86,6 +87,45 @@ pip install -e .
 deactivate
 ```
 
+### 3. OpenCode для эксперимента
+
+`OpenCode` используется как внешний CLI-инструмент и не требует отдельной папки с `.venv` внутри репозитория. Его нужно установить глобально, чтобы команда была доступна из PowerShell и из Jupyter kernel.
+
+Проверьте, что установлен Node.js:
+
+```powershell
+node --version
+npm --version
+```
+
+Если Node.js не установлен, поставьте LTS-версию с официального сайта Node.js, затем откройте PowerShell заново.
+
+Установите OpenCode:
+
+```powershell
+npm install -g opencode-ai
+```
+
+Проверьте установку:
+
+```powershell
+opencode --version
+```
+
+В benchmark runner OpenCode запускается через OpenRouter. Для каждой модели runner автоматически создает временный `opencode.config.json` в:
+
+```text
+benchmark_README/results/<run_name>/tools/opencode/<model_label>/opencode.config.json
+```
+
+Модели из конфигурации ноутбука преобразуются в OpenCode/OpenRouter формат:
+
+```text
+openai/gpt-4.1                 -> openrouter/openai/gpt-4.1
+anthropic/claude-sonnet-4      -> openrouter/anthropic/claude-sonnet-4
+google/gemma-3-27b-it          -> openrouter/google/gemma-3-27b-it
+```
+
 ## Настройка ключей
 
 Создайте файл `benchmark_README/.env`:
@@ -143,6 +183,7 @@ EXPERIMENT = {
         "osa": {"enabled": True},
         "readmeready": {"enabled": True},
         "larch": {"enabled": True, "mode": "local"},
+        "opencode": {"enabled": True},
     },
     "models": [
         "openai/gpt-4.1",
@@ -204,6 +245,7 @@ evaluation/final_summary.csv
 tools/osa/<model_label>/readmes/<repo>_README.md
 tools/larch/<model_label>/<repo>_README.md
 tools/readmeready/<model_label>/<repo>_README.md
+tools/opencode/<model_label>/<repo>_README.md
 ```
 
 Логи:
@@ -212,6 +254,7 @@ tools/readmeready/<model_label>/<repo>_README.md
 logs/osa/<model_label>.log
 logs/larch/<model_label>/<repo>.log
 logs/readmeready/<model_label>/_batch.log
+logs/opencode/<model_label>/<repo>.log
 ```
 
 ## Как работает оценка README

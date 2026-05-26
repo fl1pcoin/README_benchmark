@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import shutil
 import subprocess
 import textwrap
 import time
@@ -26,6 +28,13 @@ def _python_exe(root: Path) -> Path:
 
 def _tool_model(model: str) -> str:
     return model.removeprefix("openai/")
+
+
+def _opencode_model(model: str) -> str:
+    model = model.strip()
+    if model.startswith("openrouter/"):
+        return model
+    return f"openrouter/{model}"
 
 
 def _join_pythonpath(*paths: Path) -> str:
@@ -60,6 +69,104 @@ def _redact(text: str, env: dict[str, str] | None = None) -> str:
     for secret in {value for value in candidates if value}:
         redacted = redacted.replace(secret, "<REDACTED>")
     return redacted
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+
+
+def _clean_markdown(text: str) -> str:
+    cleaned = _strip_ansi(text).strip()
+    if cleaned.startswith("```markdown"):
+        cleaned = cleaned.removeprefix("```markdown").strip()
+    elif cleaned.startswith("```"):
+        cleaned = cleaned.removeprefix("```").strip()
+    if cleaned.endswith("```"):
+        cleaned = cleaned.removesuffix("```").strip()
+    return cleaned
+
+
+def _looks_like_readme(text: str) -> bool:
+    cleaned = _clean_markdown(text)
+    if not cleaned:
+        return False
+    first_line = next((line.strip() for line in cleaned.splitlines() if line.strip()), "")
+    if not first_line.startswith("# "):
+        return False
+    narrative_starts = (
+        "great!",
+        "to generate",
+        "i'll",
+        "i will",
+        "let's",
+        "next,",
+        "here's",
+    )
+    return not first_line.lower().startswith(narrative_starts)
+
+
+def _opencode_exe() -> str:
+    found = shutil.which("opencode") or shutil.which("opencode.cmd")
+    return found or ("opencode.cmd" if os.name == "nt" else "opencode")
+
+
+def _opencode_repo_context(repo_dir: Path, *, max_chars: int = 28000) -> str:
+    skip_dirs = {
+        ".git",
+        ".idea",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+        "dist",
+        "build",
+        ".pytest_cache",
+    }
+    preferred = {
+        "README.md",
+        "README.rst",
+        "README.txt",
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "requirements.txt",
+        "package.json",
+        "Cargo.toml",
+        "go.mod",
+        "pom.xml",
+        "Makefile",
+        "Dockerfile",
+        "LICENSE",
+    }
+    files = []
+    for path in repo_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(repo_dir)
+        if any(part in skip_dirs for part in rel.parts):
+            continue
+        rel_text = rel.as_posix()
+        if path.name in preferred or len(files) < 80:
+            files.append(rel_text)
+    files = sorted(dict.fromkeys(files))
+    parts = ["Repository file tree excerpt:", *files[:120], "", "Key file excerpts:"]
+    remaining = max_chars - sum(len(part) + 1 for part in parts)
+    for rel_text in files:
+        if remaining <= 0:
+            break
+        path = repo_dir / rel_text
+        if path.name not in preferred and not rel_text.lower().endswith((".py", ".js", ".ts", ".md")):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        excerpt = text[:3500]
+        block = f"\n--- {rel_text} ---\n{excerpt}\n"
+        if len(block) > remaining:
+            block = block[:remaining]
+        parts.append(block)
+        remaining -= len(block)
+    return "\n".join(parts)[:max_chars]
 
 
 def _run(
@@ -101,6 +208,65 @@ def _run(
     except Exception as exc:
         log_path.write_text(str(exc), encoding="utf-8")
         return "failed", str(exc)
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    else:
+        proc.kill()
+
+
+def _run_live(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    log_path: Path,
+    timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    env: dict[str, str] | None = None,
+) -> tuple[str, str, str]:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    run_env = env or _env()
+    stdout_path = log_path.with_suffix(log_path.suffix + ".stdout.tmp")
+    start = time.time()
+    with log_path.open("w", encoding="utf-8", errors="replace") as log_file, stdout_path.open("w", encoding="utf-8", errors="replace") as stdout_file:
+        log_file.write("COMMAND:\n" + _redact(" ".join(str(part) for part in cmd), run_env) + "\n\nOUTPUT:\n")
+        log_file.flush()
+        try:
+            proc = subprocess.Popen(
+                [str(part) for part in cmd],
+                cwd=str(cwd),
+                env=run_env,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_file,
+                stderr=log_file,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            while proc.poll() is None:
+                if time.time() - start > timeout_sec:
+                    _kill_process_tree(proc)
+                    log_file.write(f"\n\nTIMEOUT after {timeout_sec} seconds\n")
+                    log_file.flush()
+                    return "timeout", f"timeout after {timeout_sec} seconds", stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.is_file() else ""
+                time.sleep(1)
+            if proc.returncode != 0:
+                log_file.write(f"\n\nEXIT CODE: {proc.returncode}\n")
+                log_file.flush()
+                text = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.is_file() else ""
+                return "failed", f"exit {proc.returncode}", _redact(text, run_env)
+            text = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.is_file() else ""
+            return "done", "", _redact(text, run_env)
+        except Exception as exc:
+            log_file.write(f"\n\nERROR: {exc}\n")
+            log_file.flush()
+            return "failed", str(exc), ""
 
 
 def _status_row(
@@ -673,6 +839,200 @@ def run_larch(repo_df: pd.DataFrame, paths: BenchmarkPaths, model: str, *, reset
     return _append_status(paths, rows)
 
 
+def _opencode_config(model: str) -> str:
+    model_id = model.removeprefix("openrouter/")
+    return json.dumps(
+        {
+            "$schema": "https://opencode.ai/config.json",
+            "autoupdate": False,
+            "snapshot": False,
+            "share": "disabled",
+            "provider": {
+                "openrouter": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "name": "OpenRouter",
+                    "options": {
+                        "baseURL": "https://openrouter.ai/api/v1",
+                        "apiKey": "{env:OPENROUTER_API_KEY}",
+                    },
+                    "models": {
+                        model_id: {
+                            "name": model_id,
+                        }
+                    },
+                }
+            },
+            "agent": {
+                "readme-benchmark": {
+                    "description": "Generate README files for benchmark repositories without modifying files.",
+                    "model": _opencode_model(model),
+                    "tools": {
+                        "read": True,
+                        "glob": True,
+                        "grep": True,
+                        "bash": False,
+                        "edit": True,
+                        "write": True,
+                        "webfetch": False,
+                        "websearch": False,
+                        "task": False,
+                        "todowrite": False,
+                        "lsp": False,
+                        "skill": False,
+                    },
+                }
+            },
+        },
+        ensure_ascii=False,
+    )
+
+
+def _opencode_prompt(repo_slug: str, *, output_mode: str = "file") -> str:
+    if output_mode == "stdout":
+        return textwrap.dedent(
+            f"""
+            Generate a complete README.md for the repository in the current directory.
+
+            Repository slug: {repo_slug}
+
+            Requirements:
+            - Inspect the repository files that are available in this working tree.
+            - Do not modify, create, delete, or rename any files.
+            - Return only the final README markdown in your response.
+            - The first non-empty line of your response must start with "# ".
+            - Do not write planning notes, progress updates, tool summaries, or commentary.
+            - Include sections that are relevant to the project, such as overview, features,
+              installation, usage, configuration, development, testing, and license.
+            - If information is not present in the repository, avoid inventing exact claims.
+            """
+        ).strip()
+    return textwrap.dedent(
+        f"""
+        Generate a complete README.md for the repository in the current directory and save it
+        exactly to this file in the current directory:
+
+        .opencode_benchmark_README.md
+
+        Repository slug: {repo_slug}
+
+        Requirements:
+        - Inspect the repository files that are available in this working tree.
+        - You may create or overwrite only .opencode_benchmark_README.md.
+        - Do not modify, create, delete, or rename any other files.
+        - The file content must be only the final README markdown.
+        - The first non-empty line of the file must start with "# ".
+        - Do not write planning notes, progress updates, tool summaries, or commentary into the file.
+        - Include sections that are relevant to the project, such as overview, features,
+          installation, usage, configuration, development, testing, and license.
+        - If information is not present in the repository, avoid inventing exact claims.
+        - After writing the file, respond with only: DONE
+        """
+    ).strip()
+
+
+def run_opencode(repo_df: pd.DataFrame, paths: BenchmarkPaths, model: str, *, reset: bool = False) -> pd.DataFrame:
+    label = model_label(model)
+    output_mode = "stdout" if "gemma" in model.lower() else "file"
+    tool_dir = paths.tools_dir / "opencode" / label
+    tool_dir.mkdir(parents=True, exist_ok=True)
+    config_path = tool_dir / "opencode.config.json"
+    config_path.write_text(_opencode_config(model), encoding="utf-8")
+    key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+    rows = []
+    for repo in repo_df.itertuples():
+        repo_dir = paths.repositories_dir / repo.repo_slug
+        output = tool_dir / f"{repo.repo_slug}_README.md"
+        generated = repo_dir / ".opencode_benchmark_README.md"
+        repo_readme = repo_dir / "README.md"
+        log = paths.logs_dir / "opencode" / label / f"{repo.repo_slug}.log"
+        started = utc_now_iso()
+        start = time.time()
+        if output.is_file() and not reset:
+            existing = output.read_text(encoding="utf-8", errors="replace")
+            if _looks_like_readme(existing):
+                rows.append(_status_row(tool="opencode", model=model, repo_slug=repo.repo_slug, status="done", started_at=started, output_path=output, log_path=log))
+                continue
+            output.unlink()
+        if not key:
+            rows.append(_status_row(tool="opencode", model=model, repo_slug=repo.repo_slug, status="skipped", started_at=started, output_path=output, log_path=log, error="OPENROUTER_API_KEY or OPENAI_API_KEY is required"))
+            continue
+        if not repo_dir.is_dir():
+            rows.append(_status_row(tool="opencode", model=model, repo_slug=repo.repo_slug, status="failed", started_at=started, output_path=output, log_path=log, error=f"Repository directory does not exist: {repo_dir}"))
+            continue
+        if generated.is_file():
+            generated.unlink()
+        original_readme = repo_readme.read_text(encoding="utf-8", errors="replace") if repo_readme.is_file() else None
+        cmd = [
+            _opencode_exe(),
+            "run",
+            "--print-logs",
+            "--log-level",
+            "DEBUG",
+            "--pure",
+            "--dangerously-skip-permissions",
+            "--model",
+            _opencode_model(model),
+            "--agent",
+            "readme-benchmark",
+            "--dir",
+            repo_dir,
+            "--",
+            _opencode_prompt(repo.repo_slug, output_mode=output_mode),
+        ]
+        status, error, stdout = _run_live(
+            cmd,
+            cwd=paths.workspace_root,
+            log_path=log,
+            env=_env(
+                {
+                    "OPENROUTER_API_KEY": key,
+                    "OPENCODE_CONFIG": str(config_path),
+                    "OPENCODE_CONFIG_CONTENT": _opencode_config(model),
+                    "OPENCODE_DISABLE_AUTOUPDATE": "1",
+                    "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1",
+                }
+            ),
+        )
+        if status == "done":
+            if generated.is_file():
+                readme = _clean_markdown(generated.read_text(encoding="utf-8", errors="replace"))
+            elif repo_readme.is_file() and repo_readme.read_text(encoding="utf-8", errors="replace") != (original_readme or ""):
+                readme = _clean_markdown(repo_readme.read_text(encoding="utf-8", errors="replace"))
+            else:
+                readme = _clean_markdown(stdout)
+                status = "failed"
+                error = "OpenCode did not create .opencode_benchmark_README.md or modify README.md"
+            if readme and _looks_like_readme(readme):
+                output.write_text(readme + "\n", encoding="utf-8")
+                try:
+                    generated.unlink()
+                except FileNotFoundError:
+                    pass
+            else:
+                status = "failed"
+                error = error or "OpenCode output does not look like a README"
+            if original_readme is None:
+                if repo_readme.is_file():
+                    repo_readme.unlink()
+            else:
+                repo_readme.write_text(original_readme, encoding="utf-8")
+        final_done = output.is_file() and _looks_like_readme(output.read_text(encoding="utf-8", errors="replace"))
+        rows.append(
+            _status_row(
+                tool="opencode",
+                model=model,
+                repo_slug=repo.repo_slug,
+                status="done" if final_done else status,
+                started_at=started,
+                output_path=output,
+                log_path=log,
+                error="" if final_done else error,
+                duration_sec=time.time() - start,
+            )
+        )
+    return _append_status(paths, rows)
+
+
 def run_selected_tools(repo_df: pd.DataFrame, paths: BenchmarkPaths, experiment: dict[str, Any]) -> pd.DataFrame:
     reset = bool(experiment.get("reset", {}).get("tool_outputs", False))
     tools = experiment.get("tools", {})
@@ -684,4 +1044,6 @@ def run_selected_tools(repo_df: pd.DataFrame, paths: BenchmarkPaths, experiment:
             status = run_readmeready(repo_df, paths, model, reset=reset)
         if tools.get("larch", {}).get("enabled", False):
             status = run_larch(repo_df, paths, model, reset=reset)
+        if tools.get("opencode", {}).get("enabled", False):
+            status = run_opencode(repo_df, paths, model, reset=reset)
     return status
